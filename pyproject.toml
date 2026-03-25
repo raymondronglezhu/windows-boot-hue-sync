@@ -1,0 +1,14 @@
+[project]
+name = "hue-agent"
+version = "0.1.0"
+description = "Agent-friendly Philips Hue CLI and automation runner"
+requires-python = ">=3.11"
+readme = "README.md"
+
+[project.scripts]
+hue-agent = "hue_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+

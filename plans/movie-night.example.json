@@ -1,0 +1,25 @@
+{
+  "name": "movie-night",
+  "actions": [
+    {
+      "type": "activate_scene",
+      "scene": "Relax",
+      "room": "Living Room"
+    },
+    {
+      "type": "room_state",
+      "room": "Kitchen",
+      "on": false
+    },
+    {
+      "type": "wait",
+      "seconds": 2
+    },
+    {
+      "type": "light_state",
+      "light": "TV Lightstrip",
+      "on": true,
+      "brightness": 180
+    }
+  ]
+}
