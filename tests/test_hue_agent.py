@@ -4,8 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hue_agent.automation import run_plan
-from hue_agent.client import HueAmbiguousResource, HueBridgeClient, HueLinkButtonNotPressed
+from hue_agent.client import HueBridgeClient, HueLinkButtonNotPressed
 from hue_agent.config import HueConfig, load_config, save_config
 
 
@@ -23,20 +22,7 @@ class FakeTransport:
 
 
 FULL_STATE = {
-    "lights": {
-        "1": {
-            "name": "Desk Lamp",
-            "type": "Extended color light",
-            "modelid": "LCT015",
-            "state": {"on": True, "bri": 200, "reachable": True},
-        },
-        "2": {
-            "name": "TV Lightstrip",
-            "type": "Extended color light",
-            "modelid": "LCX004",
-            "state": {"on": False, "bri": 120, "reachable": True},
-        },
-    },
+    "lights": {},
     "groups": {
         "1": {
             "name": "Living Room",
@@ -76,14 +62,14 @@ class ClientTests(unittest.TestCase):
         with self.assertRaises(HueLinkButtonNotPressed):
             client.create_user("smart_home_cli#desktop")
 
-    def test_list_lights_includes_room_membership(self) -> None:
+    def test_list_rooms_returns_only_rooms_and_zones(self) -> None:
         transport = FakeTransport({("GET", "/api/test-user"): FULL_STATE})
         client = HueBridgeClient("192.168.1.10", username="test-user", transport=transport)
-        lights = client.list_lights()
 
-        self.assertEqual(2, len(lights))
-        self.assertEqual(["Living Room"], lights[0]["rooms"])
-        self.assertEqual("Desk Lamp", lights[0]["name"])
+        rooms = client.list_rooms()
+
+        self.assertEqual(1, len(rooms))
+        self.assertEqual("Living Room", rooms[0]["name"])
 
     def test_activate_scene_calls_group_action(self) -> None:
         responses = {
@@ -99,72 +85,18 @@ class ClientTests(unittest.TestCase):
         self.assertEqual("Living Room", result["room"]["name"])
         self.assertEqual(("PUT", "/api/test-user/groups/1/action", {"scene": "scene-relax"}), transport.calls[-1])
 
-    def test_ambiguous_partial_resource_name_raises(self) -> None:
-        state = {
-            "lights": {
-                "1": {"name": "Desk Lamp", "state": {}, "type": "light", "modelid": "A"},
-                "2": {"name": "Desk Light", "state": {}, "type": "light", "modelid": "B"},
-            },
-            "groups": {},
-            "scenes": {},
-        }
-        transport = FakeTransport({("GET", "/api/test-user"): state})
-        client = HueBridgeClient("192.168.1.10", username="test-user", transport=transport)
-
-        with self.assertRaises(HueAmbiguousResource):
-            client.set_light_state("Desk", on=True)
-
-    def test_run_plan_executes_steps_in_order(self) -> None:
+    def test_room_off_calls_group_action(self) -> None:
         responses = {
             ("GET", "/api/test-user"): FULL_STATE,
-            ("PUT", "/api/test-user/groups/1/action"): [{"success": {"/groups/1/action/scene": "scene-relax"}}],
-            ("PUT", "/api/test-user/lights/2/state"): [{"success": {"/lights/2/state/on": True}}],
+            ("PUT", "/api/test-user/groups/1/action"): [{"success": {"/groups/1/action/on": False}}],
         }
         transport = FakeTransport(responses)
         client = HueBridgeClient("192.168.1.10", username="test-user", transport=transport)
 
-        result = run_plan(
-            client,
-            {
-                "name": "movie-night",
-                "actions": [
-                    {"type": "activate_scene", "scene": "Relax", "room": "Living Room"},
-                    {"type": "light_state", "light": "TV Lightstrip", "on": True},
-                ],
-            },
-        )
+        result = client.set_room_state("Living Room", on=False)
 
-        self.assertEqual(2, result["steps_completed"])
-        self.assertEqual("activate_scene", result["results"][0]["type"])
-        self.assertEqual("light_state", result["results"][1]["type"])
-
-    def test_all_lights_off_only_targets_lights_that_are_on(self) -> None:
-        responses = {
-            ("GET", "/api/test-user"): FULL_STATE,
-            ("PUT", "/api/test-user/lights/1/state"): [{"success": {"/lights/1/state/on": False}}],
-        }
-        transport = FakeTransport(responses)
-        client = HueBridgeClient("192.168.1.10", username="test-user", transport=transport)
-
-        result = client.all_lights_off()
-
-        self.assertEqual(2, result["lights_seen"])
-        self.assertEqual(1, result["lights_targeted"])
-        self.assertEqual("Desk Lamp", result["results"][0]["name"])
-
-    def test_all_lights_on_only_targets_lights_that_are_off(self) -> None:
-        responses = {
-            ("GET", "/api/test-user"): FULL_STATE,
-            ("PUT", "/api/test-user/lights/2/state"): [{"success": {"/lights/2/state/on": True}}],
-        }
-        transport = FakeTransport(responses)
-        client = HueBridgeClient("192.168.1.10", username="test-user", transport=transport)
-
-        result = client.all_lights_on()
-
-        self.assertEqual(2, result["lights_seen"])
-        self.assertEqual(1, result["lights_targeted"])
-        self.assertEqual("TV Lightstrip", result["results"][0]["name"])
+        self.assertEqual("Living Room", result["target"]["name"])
+        self.assertEqual(("PUT", "/api/test-user/groups/1/action", {"on": False}), transport.calls[-1])
 
 
 class ConfigTests(unittest.TestCase):

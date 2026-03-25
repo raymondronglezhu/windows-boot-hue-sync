@@ -5,7 +5,6 @@ import json
 import sys
 import time
 
-from hue_agent.automation import load_plan, run_plan
 from hue_agent.client import HueBridgeClient, HueError, HueLinkButtonNotPressed
 from hue_agent.config import HueConfig, load_config, save_config
 from hue_agent.discovery import discover_bridges
@@ -15,7 +14,7 @@ DEFAULT_DEVICE_TYPE = "smart_home_cli#desktop"
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Agent-friendly Philips Hue CLI")
+    parser = argparse.ArgumentParser(description="Minimal Philips Hue setup helper for Windows Boot Hue Sync")
     parser.add_argument("--config", help="Override config path")
     parser.add_argument("--bridge-ip", help="Override Hue bridge IP")
     parser.add_argument("--username", help="Override stored Hue username")
@@ -32,42 +31,17 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("config", help="Show local Hue config")
     subparsers.add_parser("bridge-info", help="Show bridge metadata")
-    subparsers.add_parser("lights", help="List lights")
     subparsers.add_parser("rooms", help="List rooms and zones")
-    subparsers.add_parser("all-on", help="Turn every currently-off light on")
-    subparsers.add_parser("all-off", help="Turn every currently-on light off")
 
     scenes_parser = subparsers.add_parser("scenes", help="List scenes")
     scenes_parser.add_argument("--room", help="Filter scenes to a specific room")
 
-    light_on_parser = subparsers.add_parser("light-on", help="Turn a light on")
-    light_on_parser.add_argument("light")
-
-    light_off_parser = subparsers.add_parser("light-off", help="Turn a light off")
-    light_off_parser.add_argument("light")
-
-    light_brightness_parser = subparsers.add_parser("light-brightness", help="Set light brightness")
-    light_brightness_parser.add_argument("light")
-    light_brightness_parser.add_argument("brightness", type=int)
-
-    room_on_parser = subparsers.add_parser("room-on", help="Turn a room on")
-    room_on_parser.add_argument("room")
-
     room_off_parser = subparsers.add_parser("room-off", help="Turn a room off")
     room_off_parser.add_argument("room")
-
-    room_brightness_parser = subparsers.add_parser("room-brightness", help="Set room brightness")
-    room_brightness_parser.add_argument("room")
-    room_brightness_parser.add_argument("brightness", type=int)
 
     activate_scene_parser = subparsers.add_parser("activate-scene", help="Activate a Hue scene")
     activate_scene_parser.add_argument("scene")
     activate_scene_parser.add_argument("--room", help="Use this room to disambiguate scene names")
-
-    subparsers.add_parser("dump-state", help="Fetch the full authenticated Hue state payload")
-
-    run_plan_parser = subparsers.add_parser("run-plan", help="Run a JSON automation plan")
-    run_plan_parser.add_argument("plan_path")
 
     return parser
 
@@ -153,32 +127,11 @@ def dispatch(args: argparse.Namespace) -> dict:
             "bridge": client.get_bridge_config(),
         }
 
-    if args.command == "lights":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "lights": client.list_lights(),
-        }
-
     if args.command == "rooms":
         return {
             "ok": True,
             "bridge_ip": bridge_ip,
             "rooms": client.list_rooms(),
-        }
-
-    if args.command == "all-on":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.all_lights_on(),
-        }
-
-    if args.command == "all-off":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.all_lights_off(),
         }
 
     if args.command == "scenes":
@@ -188,34 +141,6 @@ def dispatch(args: argparse.Namespace) -> dict:
             "scenes": client.list_scenes(room_selector=args.room),
         }
 
-    if args.command == "light-on":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.set_light_state(args.light, on=True),
-        }
-
-    if args.command == "light-off":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.set_light_state(args.light, on=False),
-        }
-
-    if args.command == "light-brightness":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.set_light_state(args.light, on=True, brightness=args.brightness),
-        }
-
-    if args.command == "room-on":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.set_room_state(args.room, on=True),
-        }
-
     if args.command == "room-off":
         return {
             "ok": True,
@@ -223,33 +148,11 @@ def dispatch(args: argparse.Namespace) -> dict:
             "result": client.set_room_state(args.room, on=False),
         }
 
-    if args.command == "room-brightness":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "result": client.set_room_state(args.room, on=True, brightness=args.brightness),
-        }
-
     if args.command == "activate-scene":
         return {
             "ok": True,
             "bridge_ip": bridge_ip,
             "result": client.activate_scene(args.scene, room_selector=args.room),
-        }
-
-    if args.command == "dump-state":
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "state": client.get_full_state(),
-        }
-
-    if args.command == "run-plan":
-        plan = load_plan(args.plan_path)
-        return {
-            "ok": True,
-            "bridge_ip": bridge_ip,
-            "plan": run_plan(client, plan),
         }
 
     raise HueError(f"Unsupported command: {args.command}")
