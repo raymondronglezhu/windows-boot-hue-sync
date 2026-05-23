@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -13,41 +14,56 @@ namespace SmartHomeAutomation
         private const string Root = @"C:\Users\Raymond\Documents\Smart_Home";
         private const string RoomName = "Living room";
         private const string SceneName = "Bright";
+        private const string DiscoveryUrl = "https://discovery.meethue.com/";
         private static readonly string ConfigPath = Path.Combine(Root, ".hue-agent", "config.json");
         private static readonly string LogPath = Path.Combine(Root, ".hue-agent", "hue-power-service.log");
+        private static readonly object LogLock = new object();
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
 
         public void Log(string scope, string message)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(LogPath));
-            File.AppendAllText(
-                LogPath,
-                string.Format("[{0}] [{1}] {2}{3}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), scope, message, Environment.NewLine)
-            );
+            try
+            {
+                lock (LogLock)
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(LogPath));
+                    using (var stream = new FileStream(LogPath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite))
+                    using (var writer = new StreamWriter(stream))
+                    {
+                        writer.WriteLine(
+                            string.Format("[{0}] [{1}] {2}", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), scope, message)
+                        );
+                    }
+                }
+            }
+            catch
+            {
+            }
         }
 
-        public bool TryApplyStartupScene(int maxAttempts, int retryDelaySeconds)
+        public bool TryApplyScene(string scope, int maxAttempts, int retryDelaySeconds)
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 try
                 {
-                    Log("startup", string.Format("Attempt {0}/{1}", attempt, maxAttempts));
+                    Log(scope, string.Format("Attempt {0}/{1}", attempt, maxAttempts));
                     var config = LoadConfig();
                     var state = GetState(config);
                     var roomId = ResolveRoomId(state);
                     var sceneId = ResolveSceneId(state, roomId);
-                    InvokeJson(
+                    InvokeApiJson(
+                        config,
                         "PUT",
-                        string.Format("{0}/groups/{1}/action", BuildBaseApi(config), roomId),
+                        string.Format("/groups/{0}/action", roomId),
                         _json.Serialize(new Dictionary<string, object> { { "scene", sceneId } })
                     );
-                    Log("startup", string.Format("Applied scene '{0}' to '{1}'", SceneName, RoomName));
+                    Log(scope, string.Format("Applied scene '{0}' to '{1}'", SceneName, RoomName));
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    Log("startup", "Attempt failed: " + ex.Message);
+                    Log(scope, "Attempt failed: " + ex.Message);
                     if (attempt < maxAttempts)
                     {
                         Thread.Sleep(TimeSpan.FromSeconds(retryDelaySeconds));
@@ -55,31 +71,32 @@ namespace SmartHomeAutomation
                 }
             }
 
-            Log("startup", "Failed after all attempts");
+            Log(scope, "Failed after all attempts");
             return false;
         }
 
-        public bool TryTurnRoomOff(int maxAttempts, int retryDelaySeconds)
+        public bool TryTurnRoomOff(string scope, int maxAttempts, int retryDelaySeconds)
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
             {
                 try
                 {
-                    Log("shutdown", string.Format("Attempt {0}/{1}", attempt, maxAttempts));
+                    Log(scope, string.Format("Attempt {0}/{1}", attempt, maxAttempts));
                     var config = LoadConfig();
                     var state = GetState(config);
                     var roomId = ResolveRoomId(state);
-                    InvokeJson(
+                    InvokeApiJson(
+                        config,
                         "PUT",
-                        string.Format("{0}/groups/{1}/action", BuildBaseApi(config), roomId),
+                        string.Format("/groups/{0}/action", roomId),
                         _json.Serialize(new Dictionary<string, object> { { "on", false } })
                     );
-                    Log("shutdown", string.Format("Turned off '{0}'", RoomName));
+                    Log(scope, string.Format("Turned off '{0}'", RoomName));
                     return true;
                 }
                 catch (Exception ex)
                 {
-                    Log("shutdown", "Attempt failed: " + ex.Message);
+                    Log(scope, "Attempt failed: " + ex.Message);
                     if (attempt < maxAttempts)
                     {
                         Thread.Sleep(TimeSpan.FromSeconds(retryDelaySeconds));
@@ -87,7 +104,7 @@ namespace SmartHomeAutomation
                 }
             }
 
-            Log("shutdown", "Failed after all attempts");
+            Log(scope, "Failed after all attempts");
             return false;
         }
 
@@ -103,12 +120,37 @@ namespace SmartHomeAutomation
 
         private Dictionary<string, object> GetState(Dictionary<string, object> config)
         {
-            return AsDictionary(InvokeJson("GET", BuildBaseApi(config), null));
+            return AsDictionary(InvokeApiJson(config, "GET", string.Empty, null));
         }
 
         private string BuildBaseApi(Dictionary<string, object> config)
         {
             return string.Format("http://{0}/api/{1}", config["bridge_ip"], config["username"]);
+        }
+
+        private object InvokeApiJson(Dictionary<string, object> config, string method, string apiSuffix, string body)
+        {
+            var url = BuildBaseApi(config) + apiSuffix;
+
+            try
+            {
+                return InvokeJson(method, url, body);
+            }
+            catch (WebException ex)
+            {
+                if (!ShouldTryBridgeRefresh(ex))
+                {
+                    throw;
+                }
+
+                Dictionary<string, object> refreshedConfig;
+                if (!TryRefreshBridgeIp(config, out refreshedConfig))
+                {
+                    throw;
+                }
+
+                return InvokeJson(method, BuildBaseApi(refreshedConfig) + apiSuffix, body);
+            }
         }
 
         private string ResolveRoomId(Dictionary<string, object> state)
@@ -168,6 +210,101 @@ namespace SmartHomeAutomation
             }
         }
 
+        private bool TryRefreshBridgeIp(Dictionary<string, object> config, out Dictionary<string, object> refreshedConfig)
+        {
+            refreshedConfig = config;
+
+            var bridgeId = GetString(config, "bridge_id");
+            if (string.IsNullOrWhiteSpace(bridgeId))
+            {
+                return false;
+            }
+
+            var discoveredIp = DiscoverBridgeIpById(bridgeId);
+            if (string.IsNullOrWhiteSpace(discoveredIp))
+            {
+                return false;
+            }
+
+            var currentIp = GetString(config, "bridge_ip");
+            if (string.Equals(currentIp, discoveredIp, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            config["bridge_ip"] = discoveredIp;
+            SaveConfig(config);
+            refreshedConfig = LoadConfig();
+            Log("service", string.Format("Updated bridge IP from '{0}' to '{1}' via discovery", currentIp, discoveredIp));
+            return true;
+        }
+
+        private string DiscoverBridgeIpById(string bridgeId)
+        {
+            var payload = InvokeJson("GET", DiscoveryUrl, null);
+
+            if (payload is object[])
+            {
+                foreach (var item in (object[])payload)
+                {
+                    var bridge = item as Dictionary<string, object>;
+                    if (bridge == null)
+                    {
+                        continue;
+                    }
+
+                    var discoveredId = GetString(bridge, "id");
+                    if (string.Equals(discoveredId, bridgeId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return GetString(bridge, "internalipaddress");
+                    }
+                }
+            }
+
+            if (payload is ArrayList)
+            {
+                foreach (var item in (ArrayList)payload)
+                {
+                    var bridge = item as Dictionary<string, object>;
+                    if (bridge == null)
+                    {
+                        continue;
+                    }
+
+                    var discoveredId = GetString(bridge, "id");
+                    if (string.Equals(discoveredId, bridgeId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return GetString(bridge, "internalipaddress");
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private void SaveConfig(Dictionary<string, object> config)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
+            File.WriteAllText(ConfigPath, _json.Serialize(config));
+        }
+
+        private bool ShouldTryBridgeRefresh(WebException ex)
+        {
+            switch (ex.Status)
+            {
+                case WebExceptionStatus.ConnectFailure:
+                case WebExceptionStatus.ConnectionClosed:
+                case WebExceptionStatus.NameResolutionFailure:
+                case WebExceptionStatus.ProxyNameResolutionFailure:
+                case WebExceptionStatus.ReceiveFailure:
+                case WebExceptionStatus.SendFailure:
+                case WebExceptionStatus.Timeout:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private Dictionary<string, object> AsDictionary(object value)
         {
             var dictionary = value as Dictionary<string, object>;
@@ -199,25 +336,46 @@ namespace SmartHomeAutomation
 
         private const int SERVICE_ACCEPT_STOP = 0x00000001;
         private const int SERVICE_ACCEPT_SHUTDOWN = 0x00000004;
+        private const int SERVICE_ACCEPT_POWEREVENT = 0x00000040;
         private const int SERVICE_ACCEPT_PRESHUTDOWN = 0x00000100;
 
         private const int SERVICE_CONTROL_STOP = 0x00000001;
         private const int SERVICE_CONTROL_SHUTDOWN = 0x00000005;
+        private const int SERVICE_CONTROL_POWEREVENT = 0x0000000D;
         private const int SERVICE_CONTROL_PRESHUTDOWN = 0x0000000F;
+
+        private const int PBT_APMSUSPEND = 0x00000004;
+        private const int PBT_APMRESUMESUSPEND = 0x00000007;
+        private const int PBT_APMRESUMEAUTOMATIC = 0x00000012;
+        private const int PBT_POWERSETTINGCHANGE = 0x00008013;
+
+        private const int DEVICE_NOTIFY_SERVICE_HANDLE = 0x00000001;
+        private const int DISPLAY_STATE_OFF = 0;
+        private const int DISPLAY_STATE_ON = 1;
+        private const int DISPLAY_STATE_DIMMED = 2;
 
         private const int NO_ERROR = 0;
         private const int SERVICE_CONFIG_PRESHUTDOWN_INFO = 7;
         private const int PRESHUTDOWN_TIMEOUT_MS = 20000;
+        private const int WAKE_DEBOUNCE_SECONDS = 15;
+        private const int INITIAL_DISPLAY_ON_IGNORE_SECONDS = 20;
         private const string SERVICE_NAME = "HuePowerService";
+        private static readonly Guid GuidConsoleDisplayState = new Guid("6FE69556-704A-47A0-8F24-C28D936FDA47");
 
         private static readonly HueController Controller = new HueController();
         private static readonly ManualResetEvent StopEvent = new ManualResetEvent(false);
         private static readonly ServiceMainFunction MainCallback = ServiceMain;
         private static readonly HandlerEx HandlerCallback = ServiceControlHandler;
+        private static readonly object WakeLock = new object();
+        private static readonly object DisplayStateLock = new object();
 
         private static IntPtr _statusHandle = IntPtr.Zero;
+        private static IntPtr _displayNotificationHandle = IntPtr.Zero;
         private static ServiceStatus _status;
         private static StopReason _stopReason = StopReason.None;
+        private static DateTime _lastWakeHandledUtc = DateTime.MinValue;
+        private static DateTime _serviceStartedUtc = DateTime.MinValue;
+        private static int _lastDisplayState = -1;
 
         public static void Run()
         {
@@ -289,25 +447,30 @@ namespace SmartHomeAutomation
             SetServiceStatus(_statusHandle, ref _status);
 
             Controller.Log("service", "Native service starting");
+            _serviceStartedUtc = DateTime.UtcNow;
 
             var startupThread = new Thread(delegate ()
             {
-                Controller.TryApplyStartupScene(20, 3);
+                Controller.TryApplyScene("startup", 20, 3);
             });
             startupThread.IsBackground = true;
             startupThread.Start();
 
             _status.dwCurrentState = SERVICE_RUNNING;
-            _status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_PRESHUTDOWN;
+            _status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_PRESHUTDOWN | SERVICE_ACCEPT_POWEREVENT;
             _status.dwWaitHint = 0;
             SetServiceStatus(_statusHandle, ref _status);
+
+            RegisterDisplayNotifications();
 
             StopEvent.WaitOne();
 
             if (_stopReason == StopReason.Shutdown || _stopReason == StopReason.Preshutdown)
             {
-                Controller.TryTurnRoomOff(6, 2);
+                Controller.TryTurnRoomOff("shutdown", 6, 2);
             }
+
+            UnregisterDisplayNotifications();
 
             _status.dwCurrentState = SERVICE_STOPPED;
             _status.dwControlsAccepted = 0;
@@ -337,9 +500,154 @@ namespace SmartHomeAutomation
                     BeginStopPending();
                     StopEvent.Set();
                     break;
+                case SERVICE_CONTROL_POWEREVENT:
+                    HandlePowerEvent(eventType, eventData);
+                    break;
             }
 
             return NO_ERROR;
+        }
+
+        private static void HandlePowerEvent(int eventType, IntPtr eventData)
+        {
+            switch (eventType)
+            {
+                case PBT_APMSUSPEND:
+                    Controller.Log("service", "Sleep received");
+                    Controller.TryTurnRoomOff("sleep", 3, 1);
+                    break;
+                case PBT_APMRESUMEAUTOMATIC:
+                case PBT_APMRESUMESUSPEND:
+                    if (!ShouldHandleWakeEvent())
+                    {
+                        Controller.Log("service", "Wake skipped due to debounce");
+                        return;
+                    }
+
+                    Controller.Log("service", "Wake received");
+                    var wakeThread = new Thread(delegate ()
+                    {
+                        Controller.TryApplyScene("wake", 12, 2);
+                    });
+                    wakeThread.IsBackground = true;
+                    wakeThread.Start();
+                    break;
+                case PBT_POWERSETTINGCHANGE:
+                    HandlePowerSettingChange(eventData);
+                    break;
+            }
+        }
+
+        private static void HandlePowerSettingChange(IntPtr eventData)
+        {
+            if (eventData == IntPtr.Zero)
+            {
+                return;
+            }
+
+            var setting = (PowerBroadcastSetting)Marshal.PtrToStructure(eventData, typeof(PowerBroadcastSetting));
+            if (setting.PowerSetting != GuidConsoleDisplayState)
+            {
+                return;
+            }
+
+            var state = setting.Data;
+            if (!ShouldHandleDisplayState(state))
+            {
+                Controller.Log("service", string.Format("Display state {0} skipped as duplicate", state));
+                return;
+            }
+
+            switch (state)
+            {
+                case DISPLAY_STATE_OFF:
+                    Controller.Log("service", "Display off received");
+                    Controller.TryTurnRoomOff("display-off", 2, 1);
+                    break;
+                case DISPLAY_STATE_ON:
+                    if ((DateTime.UtcNow - _serviceStartedUtc).TotalSeconds < INITIAL_DISPLAY_ON_IGNORE_SECONDS)
+                    {
+                        Controller.Log("service", "Initial display on ignored during startup window");
+                        return;
+                    }
+
+                    if (!ShouldHandleWakeEvent())
+                    {
+                        Controller.Log("service", "Display on skipped due to wake debounce");
+                        return;
+                    }
+
+                    Controller.Log("service", "Display on received");
+                    var displayOnThread = new Thread(delegate ()
+                    {
+                        Controller.TryApplyScene("display-on", 12, 2);
+                    });
+                    displayOnThread.IsBackground = true;
+                    displayOnThread.Start();
+                    break;
+                case DISPLAY_STATE_DIMMED:
+                    Controller.Log("service", "Display dimmed received");
+                    break;
+            }
+        }
+
+        private static bool ShouldHandleWakeEvent()
+        {
+            lock (WakeLock)
+            {
+                var now = DateTime.UtcNow;
+                if ((now - _lastWakeHandledUtc).TotalSeconds < WAKE_DEBOUNCE_SECONDS)
+                {
+                    return false;
+                }
+
+                _lastWakeHandledUtc = now;
+                return true;
+            }
+        }
+
+        private static bool ShouldHandleDisplayState(int state)
+        {
+            lock (DisplayStateLock)
+            {
+                if (_lastDisplayState == state)
+                {
+                    return false;
+                }
+
+                _lastDisplayState = state;
+                return true;
+            }
+        }
+
+        private static void RegisterDisplayNotifications()
+        {
+            if (_statusHandle == IntPtr.Zero || _displayNotificationHandle != IntPtr.Zero)
+            {
+                return;
+            }
+
+            var powerSettingGuid = GuidConsoleDisplayState;
+            _displayNotificationHandle = RegisterPowerSettingNotification(_statusHandle, ref powerSettingGuid, DEVICE_NOTIFY_SERVICE_HANDLE);
+            if (_displayNotificationHandle == IntPtr.Zero)
+            {
+                Controller.Log("service", "Failed to register display power notifications");
+            }
+            else
+            {
+                Controller.Log("service", "Registered display power notifications");
+            }
+        }
+
+        private static void UnregisterDisplayNotifications()
+        {
+            if (_displayNotificationHandle == IntPtr.Zero)
+            {
+                return;
+            }
+
+            UnregisterPowerSettingNotification(_displayNotificationHandle);
+            _displayNotificationHandle = IntPtr.Zero;
         }
 
         private static void BeginStopPending()
@@ -377,6 +685,14 @@ namespace SmartHomeAutomation
             public int dwPreshutdownTimeout;
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PowerBroadcastSetting
+        {
+            public Guid PowerSetting;
+            public int DataLength;
+            public int Data;
+        }
+
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         private struct ServiceTableEntry
         {
@@ -407,6 +723,12 @@ namespace SmartHomeAutomation
 
         [DllImport("advapi32.dll", SetLastError = true)]
         private static extern bool CloseServiceHandle(IntPtr handle);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr RegisterPowerSettingNotification(IntPtr recipient, ref Guid powerSettingGuid, int flags);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterPowerSettingNotification(IntPtr handle);
     }
 
     internal static class Program
@@ -419,12 +741,32 @@ namespace SmartHomeAutomation
             {
                 if (args[0] == "--startup-once")
                 {
-                    return controller.TryApplyStartupScene(20, 3) ? 0 : 1;
+                    return controller.TryApplyScene("startup", 20, 3) ? 0 : 1;
                 }
 
                 if (args[0] == "--shutdown-once")
                 {
-                    return controller.TryTurnRoomOff(6, 2) ? 0 : 1;
+                    return controller.TryTurnRoomOff("shutdown", 6, 2) ? 0 : 1;
+                }
+
+                if (args[0] == "--sleep-once")
+                {
+                    return controller.TryTurnRoomOff("sleep", 3, 1) ? 0 : 1;
+                }
+
+                if (args[0] == "--wake-once")
+                {
+                    return controller.TryApplyScene("wake", 12, 2) ? 0 : 1;
+                }
+
+                if (args[0] == "--display-off-once")
+                {
+                    return controller.TryTurnRoomOff("display-off", 2, 1) ? 0 : 1;
+                }
+
+                if (args[0] == "--display-on-once")
+                {
+                    return controller.TryApplyScene("display-on", 12, 2) ? 0 : 1;
                 }
 
                 if (args[0] == "--configure-preshutdown")

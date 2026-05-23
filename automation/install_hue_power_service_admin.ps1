@@ -16,12 +16,12 @@ $serviceExe = Join-Path $root "automation\HuePowerService.exe"
 $serviceName = "HuePowerService"
 
 try {
-  sc.exe stop $serviceName | Out-Null
+  sc.exe stop $serviceName 2>$null | Out-Null
 } catch {
 }
 
 try {
-  sc.exe delete $serviceName | Out-Null
+  sc.exe delete $serviceName 2>$null | Out-Null
   Start-Sleep -Seconds 2
 } catch {
 }
@@ -29,13 +29,13 @@ try {
 powershell -ExecutionPolicy Bypass -File $buildScript | Out-Null
 
 sc.exe create $serviceName binPath= "`"$serviceExe`"" start= auto DisplayName= "Hue Power Service" depend= Tcpip | Out-Null
-sc.exe description $serviceName "Turns Hue lights on at startup and off during Windows shutdown." | Out-Null
+sc.exe description $serviceName "Turns Hue lights on at startup, wake, and display-on, and off during display-off, sleep, and Windows shutdown." | Out-Null
 & $serviceExe --configure-preshutdown
 sc.exe start $serviceName | Out-Null
 
-try {
-  schtasks /Delete /TN "HueLightsOnAtStartup" /F | Out-Null
-} catch {
+$legacyTask = Get-ScheduledTask -TaskName "HueLightsOnAtStartup" -ErrorAction SilentlyContinue
+if ($legacyTask) {
+  Unregister-ScheduledTask -TaskName "HueLightsOnAtStartup" -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 }
 
 $shutdownCmdPath = "$env:WINDIR\System32\GroupPolicy\Machine\Scripts\Shutdown\HueLightsOff.cmd"

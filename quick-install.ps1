@@ -76,8 +76,8 @@ try {
 
   Write-Host ""
   Write-Host "Windows Boot Hue Sync is installed." -ForegroundColor Green
-  Write-Host "Startup: applies the 'Bright' scene to 'Living room'." -ForegroundColor Green
-  Write-Host "Shutdown: turns 'Living room' off." -ForegroundColor Green
+  Write-Host "Boot, wake, and display-on: apply the 'Bright' scene to 'Living room'." -ForegroundColor Green
+  Write-Host "Display-off, sleep, and shutdown: turn 'Living room' off." -ForegroundColor Green
 } finally {
   Pop-Location
 }

@@ -3,6 +3,10 @@
 This folder contains the final Windows service implementation for one feature:
 
 - apply `Bright` to `Living room` at boot
+- apply `Bright` to `Living room` when Windows wakes
+- apply `Bright` to `Living room` when the display turns back on
+- turn `Living room` off when the display turns off
+- turn `Living room` off when Windows sleeps
 - turn `Living room` off at shutdown
 
 ## Files
@@ -31,6 +35,10 @@ powershell -ExecutionPolicy Bypass -File .\automation\remove_hue_power_service_a
 ## Behavior
 
 - startup: apply `Bright` to `Living room`
+- wake: apply `Bright` to `Living room`
+- display on: apply `Bright` to `Living room`
+- display off: turn off `Living room`
+- sleep: turn off `Living room`
 - shutdown: use Windows preshutdown handling and turn off `Living room`
 
 ## Log

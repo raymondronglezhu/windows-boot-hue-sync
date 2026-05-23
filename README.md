@@ -3,9 +3,13 @@
 `Windows Boot Hue Sync` is a focused Philips Hue automation for one job:
 
 - when Windows boots, apply the `Bright` scene to `Living room`
+- when Windows wakes from sleep, apply the `Bright` scene to `Living room`
+- when the display turns back on after inactivity, apply the `Bright` scene to `Living room`
+- when the display turns off after inactivity, turn `Living room` off
+- when Windows goes to sleep, turn `Living room` off
 - when Windows shuts down, turn `Living room` off
 
-It uses a native Windows service for the actual boot/shutdown behavior and a tiny local Hue helper for pairing and room/scene discovery.
+It uses a native Windows service for the actual boot/shutdown/sleep/display behavior and a tiny local Hue helper for pairing and room/scene discovery.
 
 ## What Is In This Repo
 
@@ -93,6 +97,8 @@ powershell -ExecutionPolicy Bypass -File .\automation\remove_hue_power_service_a
 ## Notes
 
 - This relies on the local Hue bridge API on your home network.
-- The startup action is scene-based for speed.
-- The shutdown action uses Windows service preshutdown handling so Windows gives it bounded time to finish.
+- Boot, wake, and display-on are scene-based for speed.
+- Display-off on inactivity sends a direct room-off command.
+- Sleep sends a direct room-off command before suspend.
+- Shutdown uses Windows service preshutdown handling so Windows gives it bounded time to finish.
 - Sudden power loss cannot be handled.
