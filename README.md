@@ -1,4 +1,4 @@
-#🖥️ Windows Boot Hue Sync 💡
+# 🖥️ Windows Boot Hue Sync 💡
 
 A tiny Windows service that keeps your Philips Hue lights in sync with your PC.
 
