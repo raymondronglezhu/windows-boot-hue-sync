@@ -1,0 +1,25 @@
+# Default: let git infer text vs binary, normalize text to LF in the repo
+* text=auto
+
+# Windows-specific scripts: always CRLF on checkout
+*.ps1   text eol=crlf
+*.psm1  text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+*.cs    text eol=crlf
+
+# Cross-platform sources: LF
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# Binaries
+*.exe   binary
+*.pdb   binary
+*.dll   binary
+*.png   binary
+*.jpg   binary
+*.gif   binary

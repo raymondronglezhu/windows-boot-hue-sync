@@ -39,10 +39,10 @@ powershell -ExecutionPolicy Bypass -File .\remove_hue_power_service_admin.ps1
 
 ```json
 {
-  "bridge_ip": "192.168.1.111",
-  "bridge_id": "...",
+  "bridge_ip": "192.168.1.2",
+  "bridge_id": "0123456789abcdef",
   "username": "...",
-  "room_id": "81",
+  "room_id": "1",
   "room_name": "Living room",
   "scene_id": "...",
   "scene_name": "Bright",

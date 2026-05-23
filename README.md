@@ -27,6 +27,7 @@ Each of those six events is a toggle in `automation\service.json` — disable an
 ## Requirements
 
 - Windows 10 or 11
+- .NET Framework 4.x (ships preinstalled on Windows 10/11 — used to compile `HuePowerService.exe` via `csc.exe`)
 - Python 3.11+ on `PATH` (only needed during install — the service itself is a native .exe)
 - A Philips Hue bridge on the same network
 - Administrator approval at install time (UAC prompt)
@@ -77,7 +78,7 @@ If the elevated window has a problem, the same banner appears in red with the er
 `discovery.meethue.com` rate-limits per source IP. If you see `Hue cloud discovery is rate-limiting your network. Wait a few minutes...`, either wait 5–10 minutes or skip discovery entirely by passing the bridge IP yourself:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\quick-install.ps1 -BridgeIp 192.168.1.111
+powershell -ExecutionPolicy Bypass -File .\quick-install.ps1 -BridgeIp 192.168.1.2
 ```
 
 You can find the bridge IP from your router's DHCP table (look for a device with MAC prefix `ec:b5:fa`, which is Philips Hue's vendor block).
@@ -103,8 +104,8 @@ The file looks like this:
 
 ```json
 {
-  "bridge_ip": "192.168.1.111",
-  "bridge_id": "ecb5fafffe...",
+  "bridge_ip": "192.168.1.2",
+  "bridge_id": "0123456789abcdef",
   "username": "...",
   "room_id": "0",
   "room_name": "All lights",
@@ -144,7 +145,8 @@ Stops the service and unregisters it from Windows. Does not delete `service.json
 - Sleep, shutdown, and display-off send a direct group-off command.
 - Shutdown uses Windows service preshutdown handling so Windows gives the service bounded time (20s) to finish before killing it.
 - The bridge IP is rediscovered automatically via `discovery.meethue.com` if the cached IP stops responding (e.g. after a router reboot reassigns the DHCP lease).
-- The bridge username (Hue API key) is stored as plaintext JSON. This matches the Hue v1 API model — the key is LAN-bound and has no remote access.
+- The bridge username (Hue API key) is stored as plaintext JSON in `automation\service.json` next to the .exe. This matches the Hue v1 API model — the key is LAN-bound and has no remote access. The file inherits the install directory's default ACLs, so any local user on the machine can read it; treat it the same as you'd treat a saved Wi-Fi password.
+- `service.log` is appended on every event and does not rotate. If you keep the service running for months, prune it manually.
 - Sudden power loss cannot be handled.
 
 ## Manual CLI Use

@@ -60,13 +60,9 @@ function Read-YesNo {
   }
 }
 
-function Invoke-HueAgent {
-  param(
-    [Parameter(Mandatory = $true)] [string[]]$AgentArgs
-  )
+function Format-AgentArguments {
+  param([string[]]$AgentArgs)
 
-  $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName = "python"
   $fullArgs = @("-m", "hue_agent") + $AgentArgs
   $quoted = foreach ($a in $fullArgs) {
     if ($a -match '[\s"]') {
@@ -75,7 +71,17 @@ function Invoke-HueAgent {
       $a
     }
   }
-  $psi.Arguments              = $quoted -join " "
+  return ($quoted -join " ")
+}
+
+function Invoke-HueAgent {
+  param(
+    [Parameter(Mandatory = $true)] [string[]]$AgentArgs
+  )
+
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName               = "python"
+  $psi.Arguments              = Format-AgentArguments -AgentArgs $AgentArgs
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError  = $true
   $psi.UseShellExecute        = $false
@@ -122,7 +128,9 @@ function Invoke-HuePairWithCountdown {
 
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName               = "python"
-  $psi.Arguments              = "-m hue_agent --bridge-ip $BridgeIp pair --watch --timeout $TimeoutSeconds"
+  $psi.Arguments              = Format-AgentArguments -AgentArgs @(
+    "--bridge-ip", $BridgeIp, "pair", "--watch", "--timeout", $TimeoutSeconds.ToString()
+  )
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError  = $true
   $psi.UseShellExecute        = $false

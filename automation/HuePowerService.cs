@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -31,6 +30,9 @@ namespace SmartHomeAutomation
         private static readonly string SettingsPath = Path.Combine(InstallDir, SettingsFileName);
         private static readonly string LogPath = Path.Combine(InstallDir, LogFileName);
         private static readonly object LogLock = new object();
+
+        // JavaScriptSerializer is deprecated but ships with .NET Framework 4.x and
+        // keeps the build dependency-free (compiles with just csc.exe, no NuGet/SDK).
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
 
         public void Log(string scope, string message)
@@ -287,32 +289,21 @@ namespace SmartHomeAutomation
 
         private string DiscoverBridgeIpById(string bridgeId)
         {
-            var payload = InvokeJson("GET", DiscoveryUrl, null);
-
-            if (payload is object[])
+            // JavaScriptSerializer.DeserializeObject returns object[] for JSON arrays.
+            var payload = InvokeJson("GET", DiscoveryUrl, null) as object[];
+            if (payload == null)
             {
-                foreach (var item in (object[])payload)
-                {
-                    var match = MatchBridgeIp(item, bridgeId);
-                    if (match != null)
-                    {
-                        return match;
-                    }
-                }
+                return null;
             }
 
-            if (payload is ArrayList)
+            foreach (var item in payload)
             {
-                foreach (var item in (ArrayList)payload)
+                var match = MatchBridgeIp(item, bridgeId);
+                if (match != null)
                 {
-                    var match = MatchBridgeIp(item, bridgeId);
-                    if (match != null)
-                    {
-                        return match;
-                    }
+                    return match;
                 }
             }
-
             return null;
         }
 
