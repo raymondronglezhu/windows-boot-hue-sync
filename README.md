@@ -2,13 +2,13 @@
 
 A tiny Windows service that keeps your Philips Hue lights in sync with your PC.
 
-- Your PC turns on → your lights turn on.
-- Your PC sleeps or shuts down → your lights turn off.
-- Your screen wakes from idle → your lights turn on. Your screen blanks → they turn off.
+- 🖥️ Your PC turns on → your lights turn on.
+- 💤 Your PC sleeps or shuts down → your lights turn off.
+- 👀 Your screen wakes from idle → your lights turn on. Your screen blanks → they turn off.
 
 You pick which room and scene to use during install. You can turn off any of the six events if you don't want it.
 
-## Install
+## 📦 Install
 
 Clone this repo, open PowerShell in the folder, then run:
 
@@ -26,17 +26,17 @@ You'll be walked through five questions:
 
 Done. Your lights will now follow your PC.
 
-## Change settings later
+## ✏️ Change settings later
 
 Re-run the installer. It remembers your bridge, so you go straight to the room / scene / triggers questions.
 
-## Uninstall
+## 🗑️ Uninstall
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\automation\remove_hue_power_service_admin.ps1
 ```
 
-## Requirements
+## 📋 Requirements
 
 - Windows 10 or 11
 - Python 3.11+ on `PATH` (only used during install; the running service is a native `.exe`)
@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File .\automation\remove_hue_power_service_a
 
 ---
 
-## Troubleshooting
+## 🔧 Troubleshooting
 
 **"Hue cloud discovery is rate-limiting your network."**
 The discovery service Philips runs gets touchy if you retry too quickly. Either wait ~10 minutes, or skip discovery by giving it your bridge IP directly:
@@ -58,7 +58,7 @@ powershell -ExecutionPolicy Bypass -File .\quick-install.ps1 -BridgeIp 192.168.1
 **Lights didn't react to something.**
 Check `automation\service.log` — it records every event with a timestamp.
 
-## Customizing without rerunning the installer
+## ⚙️ Customizing without rerunning the installer
 
 The installer writes `automation\service.json`. Edit it directly, then restart the service:
 
@@ -88,14 +88,14 @@ Each entry in `triggers` independently turns one of the six events on or off. An
 }
 ```
 
-## Notes
+## 📝 Notes
 
 - All traffic stays on your home network — no cloud after the one-time discovery call.
 - Your Hue API key lives in `automation\service.json` as plaintext, readable by any local user on the machine. Treat it like a saved Wi-Fi password.
 - `service.log` grows over time and isn't auto-rotated — prune it manually if you keep the service running for many months.
 - A sudden power loss can't be handled — Windows doesn't give the service a chance to react.
 
-## For developers
+## 🛠️ For developers
 
 The repo has three parts:
 
