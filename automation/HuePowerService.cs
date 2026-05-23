@@ -3,20 +3,33 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Web.Script.Serialization;
 
 namespace SmartHomeAutomation
 {
+    internal sealed class ServiceSettings
+    {
+        public string BridgeIp;
+        public string BridgeId;
+        public string Username;
+        public string RoomId;
+        public string RoomName;
+        public string SceneId;
+        public string SceneName;
+        public Dictionary<string, bool> Triggers;
+    }
+
     internal sealed class HueController
     {
-        private const string Root = @"C:\Users\Raymond\Documents\Smart_Home";
-        private const string RoomName = "Living room";
-        private const string SceneName = "Bright";
         private const string DiscoveryUrl = "https://discovery.meethue.com/";
-        private static readonly string ConfigPath = Path.Combine(Root, ".hue-agent", "config.json");
-        private static readonly string LogPath = Path.Combine(Root, ".hue-agent", "hue-power-service.log");
+        private const string SettingsFileName = "service.json";
+        private const string LogFileName = "service.log";
+        private static readonly string InstallDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+        private static readonly string SettingsPath = Path.Combine(InstallDir, SettingsFileName);
+        private static readonly string LogPath = Path.Combine(InstallDir, LogFileName);
         private static readonly object LogLock = new object();
         private readonly JavaScriptSerializer _json = new JavaScriptSerializer();
 
@@ -41,6 +54,24 @@ namespace SmartHomeAutomation
             }
         }
 
+        public bool IsTriggerEnabled(string trigger)
+        {
+            try
+            {
+                var settings = LoadSettings();
+                if (settings.Triggers == null)
+                {
+                    return true;
+                }
+                bool enabled;
+                return !settings.Triggers.TryGetValue(trigger, out enabled) || enabled;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
         public bool TryApplyScene(string scope, int maxAttempts, int retryDelaySeconds)
         {
             for (var attempt = 1; attempt <= maxAttempts; attempt++)
@@ -48,17 +79,29 @@ namespace SmartHomeAutomation
                 try
                 {
                     Log(scope, string.Format("Attempt {0}/{1}", attempt, maxAttempts));
-                    var config = LoadConfig();
-                    var state = GetState(config);
-                    var roomId = ResolveRoomId(state);
-                    var sceneId = ResolveSceneId(state, roomId);
+                    var settings = LoadSettings();
+                    EnsureRoomTarget(settings);
+
+                    Dictionary<string, object> body;
+                    string description;
+                    if (string.IsNullOrWhiteSpace(settings.SceneId))
+                    {
+                        body = new Dictionary<string, object> { { "on", true } };
+                        description = "last used scene";
+                    }
+                    else
+                    {
+                        body = new Dictionary<string, object> { { "scene", settings.SceneId } };
+                        description = string.Format("scene '{0}'", settings.SceneName ?? settings.SceneId);
+                    }
+
                     InvokeApiJson(
-                        config,
+                        settings,
                         "PUT",
-                        string.Format("/groups/{0}/action", roomId),
-                        _json.Serialize(new Dictionary<string, object> { { "scene", sceneId } })
+                        string.Format("/groups/{0}/action", settings.RoomId),
+                        _json.Serialize(body)
                     );
-                    Log(scope, string.Format("Applied scene '{0}' to '{1}'", SceneName, RoomName));
+                    Log(scope, string.Format("Applied {0} to '{1}'", description, settings.RoomName ?? settings.RoomId));
                     return true;
                 }
                 catch (Exception ex)
@@ -82,16 +125,15 @@ namespace SmartHomeAutomation
                 try
                 {
                     Log(scope, string.Format("Attempt {0}/{1}", attempt, maxAttempts));
-                    var config = LoadConfig();
-                    var state = GetState(config);
-                    var roomId = ResolveRoomId(state);
+                    var settings = LoadSettings();
+                    EnsureRoomTarget(settings);
                     InvokeApiJson(
-                        config,
+                        settings,
                         "PUT",
-                        string.Format("/groups/{0}/action", roomId),
+                        string.Format("/groups/{0}/action", settings.RoomId),
                         _json.Serialize(new Dictionary<string, object> { { "on", false } })
                     );
-                    Log(scope, string.Format("Turned off '{0}'", RoomName));
+                    Log(scope, string.Format("Turned off '{0}'", settings.RoomName ?? settings.RoomId));
                     return true;
                 }
                 catch (Exception ex)
@@ -108,29 +150,72 @@ namespace SmartHomeAutomation
             return false;
         }
 
-        private Dictionary<string, object> LoadConfig()
+        private ServiceSettings LoadSettings()
         {
-            if (!File.Exists(ConfigPath))
+            if (!File.Exists(SettingsPath))
             {
-                throw new InvalidOperationException("Hue config not found at " + ConfigPath);
+                throw new InvalidOperationException("Service settings not found at " + SettingsPath);
             }
 
-            return _json.Deserialize<Dictionary<string, object>>(File.ReadAllText(ConfigPath));
+            var raw = _json.Deserialize<Dictionary<string, object>>(File.ReadAllText(SettingsPath));
+            return new ServiceSettings
+            {
+                BridgeIp = GetString(raw, "bridge_ip"),
+                BridgeId = GetString(raw, "bridge_id"),
+                Username = GetString(raw, "username"),
+                RoomId = GetString(raw, "room_id"),
+                RoomName = GetString(raw, "room_name"),
+                SceneId = GetString(raw, "scene_id"),
+                SceneName = GetString(raw, "scene_name"),
+                Triggers = ParseTriggers(raw),
+            };
         }
 
-        private Dictionary<string, object> GetState(Dictionary<string, object> config)
+        private static Dictionary<string, bool> ParseTriggers(Dictionary<string, object> raw)
         {
-            return AsDictionary(InvokeApiJson(config, "GET", string.Empty, null));
+            var result = new Dictionary<string, bool>();
+            object value;
+            if (!raw.TryGetValue("triggers", out value))
+            {
+                return result;
+            }
+
+            var dict = value as Dictionary<string, object>;
+            if (dict == null)
+            {
+                return result;
+            }
+
+            foreach (var kvp in dict)
+            {
+                if (kvp.Value is bool)
+                {
+                    result[kvp.Key] = (bool)kvp.Value;
+                }
+            }
+            return result;
         }
 
-        private string BuildBaseApi(Dictionary<string, object> config)
+        private static void EnsureRoomTarget(ServiceSettings settings)
         {
-            return string.Format("http://{0}/api/{1}", config["bridge_ip"], config["username"]);
+            if (string.IsNullOrWhiteSpace(settings.RoomId))
+            {
+                throw new InvalidOperationException("room_id missing from service settings");
+            }
+            if (string.IsNullOrWhiteSpace(settings.BridgeIp) || string.IsNullOrWhiteSpace(settings.Username))
+            {
+                throw new InvalidOperationException("bridge_ip or username missing from service settings");
+            }
         }
 
-        private object InvokeApiJson(Dictionary<string, object> config, string method, string apiSuffix, string body)
+        private string BuildBaseApi(ServiceSettings settings)
         {
-            var url = BuildBaseApi(config) + apiSuffix;
+            return string.Format("http://{0}/api/{1}", settings.BridgeIp, settings.Username);
+        }
+
+        private object InvokeApiJson(ServiceSettings settings, string method, string apiSuffix, string body)
+        {
+            var url = BuildBaseApi(settings) + apiSuffix;
 
             try
             {
@@ -143,48 +228,13 @@ namespace SmartHomeAutomation
                     throw;
                 }
 
-                Dictionary<string, object> refreshedConfig;
-                if (!TryRefreshBridgeIp(config, out refreshedConfig))
+                if (!TryRefreshBridgeIp(settings))
                 {
                     throw;
                 }
 
-                return InvokeJson(method, BuildBaseApi(refreshedConfig) + apiSuffix, body);
+                return InvokeJson(method, BuildBaseApi(settings) + apiSuffix, body);
             }
-        }
-
-        private string ResolveRoomId(Dictionary<string, object> state)
-        {
-            var groups = AsDictionary(state["groups"]);
-            foreach (var entry in groups)
-            {
-                var group = AsDictionary(entry.Value);
-                var type = GetString(group, "type");
-                var name = GetString(group, "name");
-                if ((type == "Room" || type == "Zone") && name == RoomName)
-                {
-                    return entry.Key;
-                }
-            }
-
-            throw new InvalidOperationException("Room not found: " + RoomName);
-        }
-
-        private string ResolveSceneId(Dictionary<string, object> state, string roomId)
-        {
-            var scenes = AsDictionary(state["scenes"]);
-            foreach (var entry in scenes)
-            {
-                var scene = AsDictionary(entry.Value);
-                var name = GetString(scene, "name");
-                var group = GetString(scene, "group");
-                if (name == SceneName && group == roomId)
-                {
-                    return entry.Key;
-                }
-            }
-
-            throw new InvalidOperationException("Scene not found: " + SceneName);
         }
 
         private object InvokeJson(string method, string url, string body)
@@ -210,32 +260,28 @@ namespace SmartHomeAutomation
             }
         }
 
-        private bool TryRefreshBridgeIp(Dictionary<string, object> config, out Dictionary<string, object> refreshedConfig)
+        private bool TryRefreshBridgeIp(ServiceSettings settings)
         {
-            refreshedConfig = config;
-
-            var bridgeId = GetString(config, "bridge_id");
-            if (string.IsNullOrWhiteSpace(bridgeId))
+            if (string.IsNullOrWhiteSpace(settings.BridgeId))
             {
                 return false;
             }
 
-            var discoveredIp = DiscoverBridgeIpById(bridgeId);
+            var discoveredIp = DiscoverBridgeIpById(settings.BridgeId);
             if (string.IsNullOrWhiteSpace(discoveredIp))
             {
                 return false;
             }
 
-            var currentIp = GetString(config, "bridge_ip");
-            if (string.Equals(currentIp, discoveredIp, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(settings.BridgeIp, discoveredIp, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }
 
-            config["bridge_ip"] = discoveredIp;
-            SaveConfig(config);
-            refreshedConfig = LoadConfig();
-            Log("service", string.Format("Updated bridge IP from '{0}' to '{1}' via discovery", currentIp, discoveredIp));
+            var previousIp = settings.BridgeIp;
+            settings.BridgeIp = discoveredIp;
+            SaveSettings(settings);
+            Log("service", string.Format("Updated bridge IP from '{0}' to '{1}' via discovery", previousIp, discoveredIp));
             return true;
         }
 
@@ -247,16 +293,10 @@ namespace SmartHomeAutomation
             {
                 foreach (var item in (object[])payload)
                 {
-                    var bridge = item as Dictionary<string, object>;
-                    if (bridge == null)
+                    var match = MatchBridgeIp(item, bridgeId);
+                    if (match != null)
                     {
-                        continue;
-                    }
-
-                    var discoveredId = GetString(bridge, "id");
-                    if (string.Equals(discoveredId, bridgeId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return GetString(bridge, "internalipaddress");
+                        return match;
                     }
                 }
             }
@@ -265,16 +305,10 @@ namespace SmartHomeAutomation
             {
                 foreach (var item in (ArrayList)payload)
                 {
-                    var bridge = item as Dictionary<string, object>;
-                    if (bridge == null)
+                    var match = MatchBridgeIp(item, bridgeId);
+                    if (match != null)
                     {
-                        continue;
-                    }
-
-                    var discoveredId = GetString(bridge, "id");
-                    if (string.Equals(discoveredId, bridgeId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return GetString(bridge, "internalipaddress");
+                        return match;
                     }
                 }
             }
@@ -282,10 +316,38 @@ namespace SmartHomeAutomation
             return null;
         }
 
-        private void SaveConfig(Dictionary<string, object> config)
+        private string MatchBridgeIp(object item, string bridgeId)
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(ConfigPath));
-            File.WriteAllText(ConfigPath, _json.Serialize(config));
+            var bridge = item as Dictionary<string, object>;
+            if (bridge == null)
+            {
+                return null;
+            }
+
+            var discoveredId = GetString(bridge, "id");
+            if (string.Equals(discoveredId, bridgeId, StringComparison.OrdinalIgnoreCase))
+            {
+                return GetString(bridge, "internalipaddress");
+            }
+            return null;
+        }
+
+        private void SaveSettings(ServiceSettings settings)
+        {
+            var raw = new Dictionary<string, object>
+            {
+                { "bridge_ip", settings.BridgeIp },
+                { "bridge_id", settings.BridgeId },
+                { "username", settings.Username },
+                { "room_id", settings.RoomId },
+                { "room_name", settings.RoomName },
+                { "scene_id", settings.SceneId },
+                { "scene_name", settings.SceneName },
+                { "triggers", settings.Triggers ?? new Dictionary<string, bool>() },
+            };
+
+            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
+            File.WriteAllText(SettingsPath, _json.Serialize(raw));
         }
 
         private bool ShouldTryBridgeRefresh(WebException ex)
@@ -305,17 +367,7 @@ namespace SmartHomeAutomation
             }
         }
 
-        private Dictionary<string, object> AsDictionary(object value)
-        {
-            var dictionary = value as Dictionary<string, object>;
-            if (dictionary == null)
-            {
-                throw new InvalidOperationException("Unexpected JSON structure");
-            }
-            return dictionary;
-        }
-
-        private string GetString(Dictionary<string, object> dictionary, string key)
+        private static string GetString(Dictionary<string, object> dictionary, string key)
         {
             object value;
             if (dictionary.TryGetValue(key, out value) && value != null)
@@ -449,12 +501,19 @@ namespace SmartHomeAutomation
             Controller.Log("service", "Native service starting");
             _serviceStartedUtc = DateTime.UtcNow;
 
-            var startupThread = new Thread(delegate ()
+            if (Controller.IsTriggerEnabled("boot"))
             {
-                Controller.TryApplyScene("startup", 20, 3);
-            });
-            startupThread.IsBackground = true;
-            startupThread.Start();
+                var startupThread = new Thread(delegate ()
+                {
+                    Controller.TryApplyScene("startup", 20, 3);
+                });
+                startupThread.IsBackground = true;
+                startupThread.Start();
+            }
+            else
+            {
+                Controller.Log("service", "Boot trigger disabled in service.json");
+            }
 
             _status.dwCurrentState = SERVICE_RUNNING;
             _status.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN | SERVICE_ACCEPT_PRESHUTDOWN | SERVICE_ACCEPT_POWEREVENT;
@@ -465,7 +524,8 @@ namespace SmartHomeAutomation
 
             StopEvent.WaitOne();
 
-            if (_stopReason == StopReason.Shutdown || _stopReason == StopReason.Preshutdown)
+            if ((_stopReason == StopReason.Shutdown || _stopReason == StopReason.Preshutdown)
+                && Controller.IsTriggerEnabled("shutdown"))
             {
                 Controller.TryTurnRoomOff("shutdown", 6, 2);
             }
@@ -514,6 +574,11 @@ namespace SmartHomeAutomation
             {
                 case PBT_APMSUSPEND:
                     Controller.Log("service", "Sleep received");
+                    if (!Controller.IsTriggerEnabled("sleep"))
+                    {
+                        Controller.Log("service", "Sleep trigger disabled in service.json");
+                        return;
+                    }
                     Controller.TryTurnRoomOff("sleep", 3, 1);
                     break;
                 case PBT_APMRESUMEAUTOMATIC:
@@ -521,6 +586,12 @@ namespace SmartHomeAutomation
                     if (!ShouldHandleWakeEvent())
                     {
                         Controller.Log("service", "Wake skipped due to debounce");
+                        return;
+                    }
+
+                    if (!Controller.IsTriggerEnabled("wake"))
+                    {
+                        Controller.Log("service", "Wake trigger disabled in service.json");
                         return;
                     }
 
@@ -562,6 +633,11 @@ namespace SmartHomeAutomation
             {
                 case DISPLAY_STATE_OFF:
                     Controller.Log("service", "Display off received");
+                    if (!Controller.IsTriggerEnabled("display_off"))
+                    {
+                        Controller.Log("service", "Display-off trigger disabled in service.json");
+                        return;
+                    }
                     Controller.TryTurnRoomOff("display-off", 2, 1);
                     break;
                 case DISPLAY_STATE_ON:
@@ -574,6 +650,12 @@ namespace SmartHomeAutomation
                     if (!ShouldHandleWakeEvent())
                     {
                         Controller.Log("service", "Display on skipped due to wake debounce");
+                        return;
+                    }
+
+                    if (!Controller.IsTriggerEnabled("display_on"))
+                    {
+                        Controller.Log("service", "Display-on trigger disabled in service.json");
                         return;
                     }
 

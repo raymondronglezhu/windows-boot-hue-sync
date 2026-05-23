@@ -1,13 +1,8 @@
 # Hue Power Service
 
-This folder contains the final Windows service implementation for one feature:
+The Windows service that watches power events and drives the Hue bridge.
 
-- apply `Bright` to `Living room` at boot
-- apply `Bright` to `Living room` when Windows wakes
-- apply `Bright` to `Living room` when the display turns back on
-- turn `Living room` off when the display turns off
-- turn `Living room` off when Windows sleeps
-- turn `Living room` off at shutdown
+Behavior is configured by `service.json` next to the .exe (written by the top-level [`quick-install.ps1`](../quick-install.ps1)). Each of the six event types can be enabled or disabled independently.
 
 ## Files
 
@@ -16,31 +11,59 @@ This folder contains the final Windows service implementation for one feature:
 - `build_hue_power_service.ps1`
   Compiles `HuePowerService.exe`.
 - `install_hue_power_service_admin.ps1`
-  Installs the service from an elevated PowerShell window.
+  Installs the service from an elevated PowerShell window. Assumes `service.json` already exists in this directory.
 - `remove_hue_power_service_admin.ps1`
   Removes the service.
 
 ## Install
 
+Use the top-level interactive installer:
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\automation\install_hue_power_service_admin.ps1
+powershell -ExecutionPolicy Bypass -File ..\quick-install.ps1
+```
+
+Or, if `service.json` already exists in this directory, install directly:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install_hue_power_service_admin.ps1
 ```
 
 ## Remove
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\automation\remove_hue_power_service_admin.ps1
+powershell -ExecutionPolicy Bypass -File .\remove_hue_power_service_admin.ps1
 ```
 
-## Behavior
+## service.json
 
-- startup: apply `Bright` to `Living room`
-- wake: apply `Bright` to `Living room`
-- display on: apply `Bright` to `Living room`
-- display off: turn off `Living room`
-- sleep: turn off `Living room`
-- shutdown: use Windows preshutdown handling and turn off `Living room`
+```json
+{
+  "bridge_ip": "192.168.1.111",
+  "bridge_id": "...",
+  "username": "...",
+  "room_id": "81",
+  "room_name": "Living room",
+  "scene_id": "...",
+  "scene_name": "Bright",
+  "triggers": {
+    "boot": true,
+    "wake": true,
+    "display_on": true,
+    "display_off": true,
+    "sleep": true,
+    "shutdown": true
+  }
+}
+```
+
+After editing, restart the service:
+
+```powershell
+sc.exe stop HuePowerService
+sc.exe start HuePowerService
+```
 
 ## Log
 
-- `.hue-agent\hue-power-service.log`
+`service.log` (next to the .exe).

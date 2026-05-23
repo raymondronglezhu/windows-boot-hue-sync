@@ -10,9 +10,8 @@ function Assert-Admin {
 
 Assert-Admin
 
-$root = "C:\Users\Raymond\Documents\Smart_Home"
-$buildScript = Join-Path $root "automation\build_hue_power_service.ps1"
-$serviceExe = Join-Path $root "automation\HuePowerService.exe"
+$buildScript = Join-Path $PSScriptRoot "build_hue_power_service.ps1"
+$serviceExe = Join-Path $PSScriptRoot "HuePowerService.exe"
 $serviceName = "HuePowerService"
 
 try {
@@ -40,13 +39,17 @@ if ($legacyTask) {
 
 $shutdownCmdPath = "$env:WINDIR\System32\GroupPolicy\Machine\Scripts\Shutdown\HueLightsOff.cmd"
 $scriptsIniPath = "$env:WINDIR\System32\GroupPolicy\Machine\Scripts\scripts.ini"
+$removedLegacy = $false
 if (Test-Path $shutdownCmdPath) {
   Remove-Item $shutdownCmdPath -Force
+  $removedLegacy = $true
 }
 if (Test-Path $scriptsIniPath) {
   Remove-Item $scriptsIniPath -Force
+  $removedLegacy = $true
 }
-gpupdate /target:computer /force | Out-Null
+if ($removedLegacy) {
+  gpupdate /target:computer /force | Out-Null
+}
 
 Write-Output "Installed and started service: $serviceName"
-Write-Output "Removed old task/shutdown-script hooks if present"

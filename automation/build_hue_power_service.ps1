@@ -1,8 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$root = "C:\Users\Raymond\Documents\Smart_Home"
-$source = Join-Path $root "automation\HuePowerService.cs"
-$output = Join-Path $root "automation\HuePowerService.exe"
+$source = Join-Path $PSScriptRoot "HuePowerService.cs"
+$output = Join-Path $PSScriptRoot "HuePowerService.exe"
 $candidates = @(
   "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe",
   "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"

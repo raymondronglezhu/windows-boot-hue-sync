@@ -3,3 +3,5 @@ __pycache__/
 .hue-agent/
 automation/*.exe
 automation/*.pdb
+automation/service.json
+automation/service.log
