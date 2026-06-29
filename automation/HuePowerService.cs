@@ -808,6 +808,11 @@ namespace SmartHomeAutomation
     {
         private static int Main(string[] args)
         {
+            // Enable TLS 1.2 for outbound HTTPS. .NET Framework 4.x defaults to
+            // SSL3/TLS1.0, which discovery.meethue.com rejects, breaking bridge IP
+            // rediscovery when the router reassigns the bridge a new DHCP lease.
+            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+
             var controller = new HueController();
 
             if (args.Length > 0)
